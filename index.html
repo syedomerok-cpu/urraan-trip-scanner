@@ -1,0 +1,406 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#651f2b">
+  <title>Team Urraan | Trip Scanner</title>
+
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 24px 16px;
+      background: #f6f2e9;
+      color: #292522;
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin: 10px 0 24px;
+    }
+
+    .brand {
+      color: #762b38;
+      font-size: 13px;
+      font-weight: bold;
+      letter-spacing: 3px;
+    }
+
+    h1 {
+      font-size: 25px;
+      margin: 10px 0 5px;
+    }
+
+    .subtitle {
+      color: #777;
+      font-size: 14px;
+    }
+
+    .panel {
+      background: white;
+      padding: 22px;
+      border-radius: 15px;
+      box-shadow: 0 5px 24px rgba(0,0,0,.07);
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: bold;
+      margin: 15px 0 7px;
+    }
+
+    input {
+      width: 100%;
+      padding: 13px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 16px;
+      background: #fff;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      border: 0;
+      border-radius: 8px;
+      background: #762b38;
+      color: white;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    button.secondary {
+      background: #e9e2d7;
+      color: #392e2a;
+    }
+
+    #reader {
+      width: 100%;
+      margin-top: 20px;
+      overflow: hidden;
+      border-radius: 10px;
+    }
+
+    #reader video {
+      border-radius: 10px;
+    }
+
+    #status {
+      display: none;
+      margin-top: 18px;
+      padding: 15px;
+      border-radius: 9px;
+      line-height: 1.5;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .success {
+      display: block !important;
+      background: #e5f4e8;
+      color: #185b2b;
+    }
+
+    .error {
+      display: block !important;
+      background: #fbe9e8;
+      color: #8b2525;
+    }
+
+    .info {
+      display: block !important;
+      background: #f1eee7;
+      color: #51483e;
+    }
+
+    .footer {
+      text-align: center;
+      font-size: 11px;
+      color: #888;
+      margin-top: 22px;
+    }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+
+<body>
+  <main class="container">
+    <header class="header">
+      <div class="brand">TEAM URRAAN</div>
+      <h1>Trip Entry Scanner</h1>
+      <div class="subtitle">Official Organizer Verification System</div>
+    </header>
+
+    <section class="panel">
+      <div id="setup">
+        <label for="organizer">Organizer name / initials</label>
+        <input
+          id="organizer"
+          type="text"
+          maxlength="80"
+          placeholder="Enter your name or initials"
+          autocomplete="name"
+        >
+
+        <label for="pin">Organizer PIN</label>
+        <input
+          id="pin"
+          type="password"
+          placeholder="Enter organizer PIN"
+          autocomplete="off"
+        >
+
+        <button id="startButton" type="button">
+          Start QR Scanner
+        </button>
+      </div>
+
+      <div id="scannerArea" class="hidden">
+        <div id="reader"></div>
+
+        <button id="stopButton" class="secondary" type="button">
+          Stop Scanner
+        </button>
+      </div>
+
+      <div id="status" role="status" aria-live="polite"></div>
+
+      <button id="againButton" class="hidden" type="button">
+        Scan Next Pass
+      </button>
+    </section>
+
+    <div class="footer">
+      TEAM URRAAN · AUTHORIZED ORGANIZER ACCESS ONLY
+    </div>
+  </main>
+
+<script>
+  const WORKER_URL = "https://damp-cake-f8b6.syedomerok.workers.dev/";
+
+  const setup = document.getElementById("setup");
+  const scannerArea = document.getElementById("scannerArea");
+  const statusBox = document.getElementById("status");
+  const startButton = document.getElementById("startButton");
+  const stopButton = document.getElementById("stopButton");
+  const againButton = document.getElementById("againButton");
+
+  let scanner = null;
+  let organizerName = "";
+  let organizerPin = "";
+  let processing = false;
+  let scannerRunning = false;
+
+  function showStatus(message, type) {
+    statusBox.className = type;
+    statusBox.textContent = message;
+  }
+
+  function extractToken(qrText) {
+    const value = String(qrText || "").trim();
+
+    // Also accept a raw token, if one is ever presented.
+    if (/^[a-f0-9]{64}$/i.test(value)) {
+      return value;
+    }
+
+    try {
+      const url = new URL(value);
+      const token = url.searchParams.get("token");
+
+      if (token && /^[a-f0-9]{64}$/i.test(token)) {
+        return token;
+      }
+    } catch (error) {
+      // Not a valid URL.
+    }
+
+    throw new Error("This is not a valid Team Urraan QR pass.");
+  }
+
+  async function startScanner() {
+    organizerName = document.getElementById("organizer").value.trim();
+    organizerPin = document.getElementById("pin").value;
+
+    if (!organizerName || !organizerPin) {
+      showStatus("Enter your organizer name and PIN first.", "error");
+      return;
+    }
+
+    if (organizerPin.length < 8) {
+      showStatus("The PIN entered is too short.", "error");
+      return;
+    }
+
+    startButton.disabled = true;
+    showStatus("Requesting camera access...", "info");
+
+    try {
+      scannerArea.classList.remove("hidden");
+      setup.classList.add("hidden");
+      againButton.classList.add("hidden");
+
+      scanner = new Html5Qrcode("reader");
+
+      await scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 240, height: 240 },
+          aspectRatio: 1
+        },
+        onQrDetected,
+        () => {}
+      );
+
+      scannerRunning = true;
+      showStatus("Camera active. Position the student's QR code inside the frame.", "info");
+
+    } catch (error) {
+      scannerArea.classList.add("hidden");
+      setup.classList.remove("hidden");
+      startButton.disabled = false;
+
+      showStatus(
+        "Could not start the camera: " + (error.message || error) +
+        ". Check camera permission and make sure this page is opened over HTTPS.",
+        "error"
+      );
+    }
+  }
+
+  async function stopScanner() {
+    if (scanner && scannerRunning) {
+      try {
+        await scanner.stop();
+      } catch (error) {
+        console.warn("Scanner stop:", error);
+      }
+    }
+
+    scannerRunning = false;
+  }
+
+  async function onQrDetected(decodedText) {
+    if (processing) return;
+
+    processing = true;
+    await stopScanner();
+
+    try {
+      const token = extractToken(decodedText);
+
+      showStatus("QR recognized. Verifying pass with the registration server...", "info");
+
+      const response = await fetch(WORKER_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          token: token,
+          pin: organizerPin,
+          organizer: organizerName,
+          device: navigator.userAgent
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "Server request failed.");
+      }
+
+      if (result.ok) {
+        showStatus(
+          "ENTRY APPROVED\n\n" +
+          (result.message || "Pass successfully verified.") +
+          (result.studentName ? "\nStudent: " + result.studentName : "") +
+          (result.passId ? "\nPass ID: " + result.passId : ""),
+          "success"
+        );
+      } else {
+        showStatus(
+          "ENTRY NOT APPROVED\n\n" +
+          (result.message || "This pass could not be verified.") +
+          (result.studentName ? "\nStudent: " + result.studentName : "") +
+          (result.passId ? "\nPass ID: " + result.passId : ""),
+          "error"
+        );
+      }
+
+    } catch (error) {
+      showStatus(
+        "VERIFICATION FAILED\n\n" +
+        (error.message || "Unable to contact the server.") +
+        "\n\nDo not admit the student based on this scan. Check the connection and try again.",
+        "error"
+      );
+    }
+
+    againButton.classList.remove("hidden");
+  }
+
+  async function scanNext() {
+    processing = false;
+    statusBox.style.display = "none";
+    statusBox.className = "";
+    againButton.classList.add("hidden");
+
+    try {
+      scanner = new Html5Qrcode("reader");
+
+      await scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 240, height: 240 },
+          aspectRatio: 1
+        },
+        onQrDetected,
+        () => {}
+      );
+
+      scannerRunning = true;
+      showStatus("Ready for the next pass.", "info");
+
+    } catch (error) {
+      showStatus("Could not restart camera: " + (error.message || error), "error");
+      againButton.classList.remove("hidden");
+    }
+  }
+
+  startButton.addEventListener("click", startScanner);
+
+  stopButton.addEventListener("click", async () => {
+    await stopScanner();
+    scannerArea.classList.add("hidden");
+    setup.classList.remove("hidden");
+    startButton.disabled = false;
+    showStatus("Scanner stopped.", "info");
+  });
+
+  againButton.addEventListener("click", scanNext);
+</script>
+</body>
+</html>
